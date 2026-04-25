@@ -13,6 +13,23 @@ function formatTime(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+async function sendToAssistant(args: { message: string; history: Array<{ role: 'user' | 'assistant'; content: string }> }) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+
+  const data = (await res.json()) as { message?: string }
+  if (!data.message) throw new Error('Réponse vide')
+  return data.message
+}
+
 export default function Home() {
   const sessionId = useId()
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
@@ -35,7 +52,7 @@ export default function Home() {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages.length])
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     const content = input.trim()
     if (!content || isSending) return
@@ -43,16 +60,45 @@ export default function Home() {
     setIsSending(true)
     setInput('')
 
-    const msg: ChatMessage = {
+    const userMsg: ChatMessage = {
       id: `${sessionId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       role: 'user',
       content,
       createdAt: Date.now(),
     }
 
-    setMessages((prev) => [...prev, msg])
-    setIsSending(false)
-    queueMicrotask(() => listRef.current?.focus())
+    const historyForApi = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role, content: m.content }))
+
+    setMessages((prev) => [...prev, userMsg])
+
+    try {
+      const assistantText = await sendToAssistant({
+        message: content,
+        history: historyForApi,
+      })
+
+      const assistantMsg: ChatMessage = {
+        id: `${sessionId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        role: 'assistant',
+        content: assistantText,
+        createdAt: Date.now(),
+      }
+      setMessages((prev) => [...prev, assistantMsg])
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : 'Erreur inconnue'
+      const assistantMsg: ChatMessage = {
+        id: `${sessionId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        role: 'assistant',
+        content: `Désolé, je n’arrive pas à répondre pour le moment.\n\nDétail: ${errorText}`,
+        createdAt: Date.now(),
+      }
+      setMessages((prev) => [...prev, assistantMsg])
+    } finally {
+      setIsSending(false)
+      queueMicrotask(() => listRef.current?.focus())
+    }
   }
 
   return (
@@ -65,7 +111,7 @@ export default function Home() {
             </div>
             <div className="leading-tight">
               <h1 className="text-xl font-semibold tracking-tight">Coach Parental</h1>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">Interface de chat (UI uniquement)</p>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">Propulsé par Groq (llama3-8b-8192)</p>
             </div>
           </div>
         </header>
